@@ -16,6 +16,7 @@ class NormalizationType(Enum):
 
 class Div255(torch.nn.Module):
     def forward(self, x):
+        x = np.array(x)
         x = x / 255
         return x
 
@@ -56,7 +57,7 @@ class RandomContrastProteinChannel(torch.nn.Module):
             return img
         if np.random.rand() <= self.p:
             random_factor = (np.random.rand() * 2) / img.max()  # scaling
-            img[1] = img[1] * random_factor
+            img[0] = img[0] * random_factor
             return img
         else:
             return img
@@ -73,10 +74,10 @@ class RandomRemoveChannelExceptProtein(torch.nn.Module):
 
     def forward(self, img):
         img_size = np.array(img).shape
-        if img_size[0] < 4:
+        if img_size[0] < 3:
             return img
         if np.random.rand() <= self.p:
-            channel_to_blacken = np.random.choice(np.array([0, 2, 3]))
+            channel_to_blacken = np.random.choice(np.array([1, 2]))
             img[channel_to_blacken] = torch.zeros(1, *img.shape[1:])
             return img
         else:
@@ -95,7 +96,7 @@ class RandomRemoveChannel(torch.nn.Module):
     def forward(self, img):
         img_size = np.array(img).shape
         num_channels = img_size[0]
-        if num_channels < 4:
+        if num_channels < 3:
             return img
         if np.random.rand() <= self.p:
             channel_to_blacken = np.random.choice(np.array(list(range(num_channels))))

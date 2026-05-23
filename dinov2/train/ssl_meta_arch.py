@@ -16,7 +16,7 @@ from dinov2.utils.utils import has_batchnorms
 from dinov2.utils.param_groups import get_params_groups_with_decay, fuse_params_groups
 from dinov2.fsdp import get_fsdp_wrapper, ShardedGradScaler, get_fsdp_modules, reshard_fsdp_model
 
-from dinov2.models.vision_transformer import BlockChunk
+from dinov2.layers import BlockChunk
 
 
 try:
@@ -54,6 +54,18 @@ class SSLMetaArch(nn.Module):
         self.do_koleo = cfg.dino.koleo_loss_weight > 0
         self.do_ibot = cfg.ibot.loss_weight > 0
         self.ibot_separate_head = cfg.ibot.separate_head
+
+        self.reconstruction = cfg.train.get("reconstruction", False)
+        self.generation = cfg.train.get("generation", False)
+
+        logger.info(f"OPTIONS -- reconstruction: {self.reconstruction}, generation: {self.generation}")
+        if self.reconstruction:
+            self.recon_loss_weight = cfg.train.reconstruction_loss_weight
+            logger.info(f"OPTIONS -- reconstruction -- loss_weight: {self.recon_loss_weight}")
+        if self.generation:
+            self.recon_loss_weight = cfg.train.reconstruction_loss_weight
+            self.generation_loss_weight = cfg.train.reconstruction_loss_weight
+            logger.info(f"OPTIONS -- generation -- loss_weight: {self.generation_loss_weight}")
 
         logger.info("OPTIONS -- DINO")
         if self.do_dino:
@@ -233,8 +245,35 @@ class SSLMetaArch(nn.Module):
 
         loss_accumulator = 0  # for backprop
         student_global_backbone_output_dict, student_local_backbone_output_dict = self.student.backbone(
-            [global_crops, local_crops], masks=[masks, None], is_training=True
+            [global_crops, local_crops], masks=[masks, None], is_training=True,
         )
+
+        # 0. reconstruction and generation losses
+        if self.reconstruction or self.generation:
+            decoded_output_dict = self.student.backbone.decode_features(student_global_backbone_output_dict)
+            global_crops_unnorm = images['collated_global_crops_recon'].cuda(non_blocking=True)
+            protein = global_crops_unnorm[:, :1]
+            contour = global_crops_unnorm[:, 1:]
+        if self.reconstruction:
+            groundtruth = torch.cat((protein, contour), dim=1)
+            reconstruction = decoded_output_dict['reconstruction']
+            # l1 loss between reconstruction and input global crops
+            reconstruction_loss = nn.functional.mse_loss(reconstruction, groundtruth)
+            loss_dict["recon_loss"] = reconstruction_loss
+            loss_accumulator += self.recon_loss_weight * reconstruction_loss
+            if torch.isnan(loss_accumulator):
+                raise RuntimeError(f"Max value in reconstruction output: {reconstruction.max().item()}, min value: {reconstruction.min().item()}")
+
+        if self.generation:
+            # only generate the protein channel, so the groundtruth should only contain protein
+            generation = decoded_output_dict['generation']
+            # l1 loss between generation and input global crops
+            generation_loss = nn.functional.mse_loss(generation, protein)
+            loss_dict["generation_loss"] = generation_loss
+            loss_accumulator += self.generation_loss_weight * generation_loss * 3.0
+            if torch.isnan(loss_accumulator):
+                # analysis code to help debug ibot loss if it is the cause of the NaN, can be removed eventually
+                raise RuntimeError(f"Max value in generation output: {generation.max().item()}, min value: {generation.min().item()}")
 
         inputs_for_student_head_list = []
 
@@ -348,9 +387,20 @@ class SSLMetaArch(nn.Module):
     def fsdp_synchronize_streams(self):
         if self.need_to_synchronize_fsdp_streams:
             torch.cuda.synchronize()
-            self.student.dino_head._streams = (
-                self.teacher.dino_head._streams
-            ) = self.student.backbone._streams = self.teacher.backbone._streams
+            for attr in {
+                '_unshard_stream',
+                '_post_backward_stream',
+                '_pre_unshard_stream',
+                '_all_reduce_stream',
+                '_default_stream'
+            }:
+                stream = getattr(self.teacher.backbone, attr)
+                setattr(self.student.dino_head, attr, stream)
+                setattr(self.teacher.dino_head, attr, stream)
+                setattr(self.student.backbone, attr, stream)
+                if 'ibot_head' in self.student.keys():
+                    setattr(self.student.ibot_head, attr, stream)
+                    setattr(self.teacher.ibot_head, attr, stream)
             self.need_to_synchronize_fsdp_streams = False
 
     def update_teacher(self, m):

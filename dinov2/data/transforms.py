@@ -6,7 +6,38 @@
 from typing import Sequence
 
 import torch
+import numpy as np
 from torchvision import transforms
+
+
+class RandomBrightnessExceptSegmentation(torch.nn.Module):
+    def __init__(self, p=0.2):
+        super().__init__()
+        self.p = p
+
+    def forward(self, img):
+        if img.max() == 0:
+            return img
+        channels = [0, 1]
+        for ind in channels:
+            factor = max(np.random.normal(1, self.p), 0.5)
+            img[ind] = transforms.functional.adjust_brightness(img[ind], factor)
+        return img
+
+
+class RandomContrastExceptSegmentation(torch.nn.Module):
+    def __init__(self, p=0.2):
+        super().__init__()
+        self.p = p
+
+    def forward(self, img):
+        if img.max() == 0:
+            return img
+        channels = [0, 1]
+        for ind in channels:
+            factor = max(np.random.normal(1, self.p), 0.5)
+            img[ind] = transforms.functional.adjust_contrast(img[ind][None, ...], factor)
+        return img
 
 
 class GaussianBlur(transforms.RandomApply):
@@ -19,6 +50,16 @@ class GaussianBlur(transforms.RandomApply):
         keep_p = 1 - p
         transform = transforms.GaussianBlur(kernel_size=9, sigma=(radius_min, radius_max))
         super().__init__(transforms=[transform], p=keep_p)
+
+
+class GaussianBlurExceptSegmentation(GaussianBlur):
+    def forward(self, img):
+        if img.max() == 0:
+            return img
+        channels = [0, 1]
+        for ind in channels:
+            img[ind] = super().forward(img[ind][None, ...])
+        return img
 
 
 class MaybeToTensor(transforms.ToTensor):
@@ -48,6 +89,15 @@ def make_normalize_transform(
     std: Sequence[float] = IMAGENET_DEFAULT_STD,
 ) -> transforms.Normalize:
     return transforms.Normalize(mean=mean, std=std)
+
+
+def make_denormalize_transform(
+    mean: Sequence[float] = IMAGENET_DEFAULT_MEAN,
+    std: Sequence[float] = IMAGENET_DEFAULT_STD,
+) -> transforms.Normalize:
+    mean_inv = [-m / s for m, s in zip(mean, std)]
+    std_inv = [1 / s for s in std]
+    return transforms.Normalize(mean=mean_inv, std=std_inv)
 
 
 # This roughly matches torchvision's preset for classification training:

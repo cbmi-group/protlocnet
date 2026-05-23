@@ -22,7 +22,9 @@ def get_vit_lr_decay_rate(name, lr_decay_rate=1.0, num_layers=12, force_is_backb
     """
     layer_id = num_layers + 1
     if name.startswith("backbone") or force_is_backbone:
-        if (
+        if "decoder_blocks" in name or "injector_blocks" in name:
+            layer_id = num_layers + 1
+        elif (
             ".pos_embed" in name
             or ".patch_embed" in name
             or ".mask_token" in name
@@ -76,6 +78,13 @@ def get_params_groups_with_decay(model, lr_decay_rate=1.0, patch_embed_lr_mult=1
 
         if "last_layer" in name:
             d.update({"is_last_layer": True})
+
+        if any([
+            s in name for s in 
+            [
+                "decoder_", "injector_", "protein_pred", "contour_pred",
+        ]]):
+            d.update({"wd_multiplier": 1.0, "lr_multiplier": 1.0})
 
         if name.endswith(".bias") or "norm" in name or "gamma" in name:
             d.update({"wd_multiplier": 0.0})

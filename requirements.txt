@@ -1,11 +1,13 @@
---extra-index-url https://download.pytorch.org/whl/cu117
-torch==2.0.0
-torchvision==0.15.0
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.9.1
+torchvision==0.24.1
 omegaconf
-torchmetrics==0.10.3
+torchmetrics
 fvcore
 iopath
-xformers==0.0.18
+xformers==0.0.33.post2
 submitit
---extra-index-url https://pypi.nvidia.com
-cuml-cu11
+pandas
+scikit-learn
+umap-learn
+matplotlib

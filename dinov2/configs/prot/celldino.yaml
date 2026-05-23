@@ -1,17 +1,17 @@
 train: 
   batch_size_per_gpu: 16
-  OFFICIAL_EPOCH_LENGTH: 1756
+  OFFICIAL_EPOCH_LENGTH: 1904
   cell_augmentation: true
 student: 
   arch: vit_large
   patch_size: 16
-  in_chans: 4
+  in_chans: 3
   drop_path_rate: 0.1
   block_chunks: 4
 teacher:
   momentum_teacher: 0.996
   warmup_teacher_temp_epochs: 20
-  in_chans: 4
+  in_chans: 3
 optim:
   weight_decay_end: 0.2
   base_lr: 5.0e-4 

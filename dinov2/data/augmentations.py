@@ -9,7 +9,12 @@ from torchvision import transforms
 
 from .transforms import (
     GaussianBlur,
+    MaybeToTensor,
+    GaussianBlurExceptSegmentation,
+    RandomBrightnessExceptSegmentation,
+    RandomContrastExceptSegmentation,
     make_normalize_transform,
+    make_denormalize_transform,
 )
 
 
@@ -24,6 +29,7 @@ class DataAugmentationDINO(object):
         local_crops_number,
         global_crops_size=224,
         local_crops_size=96,
+        scheme: str = "dino",
     ):
         self.global_crops_scale = global_crops_scale
         self.local_crops_scale = local_crops_scale
@@ -38,60 +44,96 @@ class DataAugmentationDINO(object):
         logger.info(f"local_crops_number: {local_crops_number}")
         logger.info(f"global_crops_size: {global_crops_size}")
         logger.info(f"local_crops_size: {local_crops_size}")
+        logger.info(f"cheme: {scheme}")
         logger.info("###################################")
 
-        # random resized crop and flip
-        self.geometric_augmentation_global = transforms.Compose(
-            [
-                transforms.RandomResizedCrop(
-                    global_crops_size, scale=global_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
-                ),
-                transforms.RandomHorizontalFlip(p=0.5),
-            ]
-        )
-
-        self.geometric_augmentation_local = transforms.Compose(
-            [
-                transforms.RandomResizedCrop(
-                    local_crops_size, scale=local_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
-                ),
-                transforms.RandomHorizontalFlip(p=0.5),
-            ]
-        )
-
         # color distorsions / blurring
-        color_jittering = transforms.Compose(
-            [
-                transforms.RandomApply(
-                    [transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)],
-                    p=0.8,
-                ),
-                transforms.RandomGrayscale(p=0.2),
-            ]
-        )
+        if scheme == "dino":
+            # random resized crop and flip
+            self.geometric_augmentation_global = transforms.Compose(
+                [
+                    transforms.RandomResizedCrop(
+                        global_crops_size, scale=global_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
+                    ),
+                    transforms.RandomHorizontalFlip(p=0.5),
+                ]
+            )
 
-        global_transfo1_extra = GaussianBlur(p=1.0)
+            self.geometric_augmentation_local = transforms.Compose(
+                [
+                    transforms.RandomResizedCrop(
+                        local_crops_size, scale=local_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
+                    ),
+                    transforms.RandomHorizontalFlip(p=0.5),
+                ]
+            )
 
-        global_transfo2_extra = transforms.Compose(
-            [
-                GaussianBlur(p=0.1),
-                transforms.RandomSolarize(threshold=128, p=0.2),
-            ]
-        )
+            color_jittering = transforms.Compose(
+                [
+                    transforms.RandomApply(
+                        [transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)],
+                        p=0.8,
+                    ),
+                    transforms.RandomGrayscale(p=0.2),
+                ]
+            )
 
-        local_transfo_extra = GaussianBlur(p=0.5)
+            global_transfo1_extra = GaussianBlur(p=1.0)
+
+            global_transfo2_extra = transforms.Compose(
+                [
+                    GaussianBlur(p=0.1),
+                    transforms.RandomSolarize(threshold=128, p=0.2),
+                ]
+            )
+
+            local_transfo_extra = GaussianBlur(p=0.5)
+        elif scheme == 'prot':
+            self.geometric_augmentation_global = transforms.Compose(
+                [
+                    transforms.RandomRotation(degrees=(0, 180)),
+                    transforms.RandomResizedCrop(
+                        global_crops_size, scale=global_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
+                    ),
+                ]
+            )
+
+            self.geometric_augmentation_local = transforms.Compose(
+                [
+                    transforms.RandomRotation(degrees=(0, 180)),
+                    transforms.RandomResizedCrop(
+                        local_crops_size, scale=local_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
+                    ),
+                ]
+            )
+
+            color_jittering = transforms.Compose(
+                [
+                    transforms.ToTensor(),
+                    RandomBrightnessExceptSegmentation(),
+                    RandomContrastExceptSegmentation(),
+                ]
+            )
+
+            global_transfo1_extra = GaussianBlurExceptSegmentation(p=1.0)
+            global_transfo2_extra = GaussianBlurExceptSegmentation(p=0.1)
+            local_transfo_extra = GaussianBlurExceptSegmentation(p=0.5)
+        else:
+            raise ValueError(f'Unknown augmentation scheme: {scheme}')
 
         # normalization
         self.normalize = transforms.Compose(
             [
-                transforms.ToTensor(),
+                MaybeToTensor(),
                 make_normalize_transform(),
             ]
         )
+        self.denormalize = make_denormalize_transform()
 
-        self.global_transfo1 = transforms.Compose([color_jittering, global_transfo1_extra, self.normalize])
-        self.global_transfo2 = transforms.Compose([color_jittering, global_transfo2_extra, self.normalize])
+        self.global_transfo1 = transforms.Compose([color_jittering, global_transfo1_extra])
+        self.global_transfo2 = transforms.Compose([color_jittering, global_transfo2_extra])
         self.local_transfo = transforms.Compose([color_jittering, local_transfo_extra, self.normalize])
+        self.to_tensor = MaybeToTensor()
 
     def __call__(self, image):
         output = {}
@@ -103,10 +145,8 @@ class DataAugmentationDINO(object):
         im2_base = self.geometric_augmentation_global(image)
         global_crop_2 = self.global_transfo2(im2_base)
 
-        output["global_crops"] = [global_crop_1, global_crop_2]
-
-        # global crops for teacher:
-        output["global_crops_teacher"] = [global_crop_1, global_crop_2]
+        output["global_crops"] = [self.normalize(global_crop_1), self.normalize(global_crop_2)]
+        output["global_crops_recon"] = [self.to_tensor(im1_base), self.to_tensor(im2_base)]
 
         # local crops:
         local_crops = [

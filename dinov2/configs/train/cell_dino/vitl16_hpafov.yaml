@@ -27,6 +27,4 @@ crops:
   global_crops_size: 224
   local_crops_size: 96
 evaluation:  
-  eval_period_iterations: 9000
-
-  
+  eval_period_epochs: 10

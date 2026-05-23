@@ -9,3 +9,7 @@ dist/
 *.swp
 
 .vscode/
+
+train_dir/
+.python-version
+.venv

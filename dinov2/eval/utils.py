@@ -28,18 +28,20 @@ class ModelWithNormalize(torch.nn.Module):
 
 
 class ModelWithIntermediateLayers(nn.Module):
-    def __init__(self, feature_model, n_last_blocks, autocast_ctx):
+    def __init__(self, feature_model, n_last_blocks, autocast_ctx, token_type=None):
         super().__init__()
         self.feature_model = feature_model
         self.feature_model.eval()
         self.n_last_blocks = n_last_blocks
         self.autocast_ctx = autocast_ctx
+        self.token_type = token_type
 
     def forward(self, images):
         with torch.inference_mode():
             with self.autocast_ctx():
                 features = self.feature_model.get_intermediate_layers(
-                    images, self.n_last_blocks, return_class_token=True
+                    images, self.n_last_blocks, return_class_token=True,
+                    token_type=self.token_type,
                 )
         return features
 

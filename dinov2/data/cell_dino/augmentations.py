@@ -15,6 +15,7 @@ from .transforms import (
     Div255,
     SelfNormalizeNoDiv,
 )
+from dinov2.data.transforms import MaybeToTensor
 
 logger = logging.getLogger("dinov2")
 
@@ -58,15 +59,17 @@ class CellAugmentationDINO(object):
         ]
 
         global_transforms_list = first_transforms_list.copy()
-        global_transforms_list.append(
+        global_transforms_list.extend([
+            MaybeToTensor(),
             torchvision.transforms.RandomResizedCrop(size=global_crops_size, scale=global_crops_scale)
-        )
+        ])
         global_transforms_list = global_transforms_list + additional_transforms_list
 
         local_transforms_list = first_transforms_list
-        local_transforms_list.append(
+        local_transforms_list.extend([
+            MaybeToTensor(),
             torchvision.transforms.RandomResizedCrop(size=local_crops_size, scale=local_crops_scale)
-        )
+        ])
         local_transforms_list = local_transforms_list + additional_transforms_list
 
         self.global_transform = transforms.Compose(global_transforms_list)
@@ -86,6 +89,7 @@ class CellAugmentationDINO(object):
 
         output["local_crops"] = local_crops
         output["global_crops_teacher"] = [global_crop1, global_crop2]
+        output["global_crops_recon"] = [global_crop1, global_crop2]
         output["offsets"] = ()
 
         return output

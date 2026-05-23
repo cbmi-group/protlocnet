@@ -1,0 +1,10 @@
+train:
+  batch_size_per_gpu: 32
+  output_dir: train_dir/proteinnet/baseline
+  generation: true
+  reconstruction: true
+  reconstruction_loss_weight: 1.0
+student:
+  arch: prot_base
+crops:
+  scheme: prot

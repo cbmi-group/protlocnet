@@ -15,10 +15,9 @@ from typing import Sequence, Tuple, Union, Callable
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.utils.checkpoint
 from torch.nn.init import trunc_normal_
 
-from dinov2.layers import Mlp, PatchEmbed, SwiGLUFFNFused, MemEffAttention, NestedTensorBlock as Block
+from dinov2.layers import BlockChunk, Mlp, PatchEmbed, SwiGLUFFNFused, MemEffAttention, NestedTensorBlock as Block
 
 
 logger = logging.getLogger("dinov2")
@@ -33,13 +32,6 @@ def named_apply(fn: Callable, module: nn.Module, name="", depth_first=True, incl
     if depth_first and include_root:
         fn(module=module, name=name)
     return module
-
-
-class BlockChunk(nn.ModuleList):
-    def forward(self, x):
-        for b in self:
-            x = b(x)
-        return x
 
 
 class DinoVisionTransformer(nn.Module):
