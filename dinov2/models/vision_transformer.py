@@ -297,6 +297,7 @@ class DinoVisionTransformer(nn.Module):
         reshape: bool = False,
         return_class_token: bool = False,
         norm=True,
+        **_,
     ) -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor]]]:
 
         if self.bag_of_channels:

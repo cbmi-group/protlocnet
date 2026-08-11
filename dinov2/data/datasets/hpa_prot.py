@@ -49,8 +49,84 @@ PROTEIN_LOCALIZATION = [
 ] # 34 classes
 
 
+PROTEIN_LOCALIZATION_19 = [
+    'Negative', # 0
+    'Nucleoplasm',
+    'Nuclear membrane',
+    'Nucleoli',
+    'Nucleoli fibrillar center',
+    'Nuclear speckles', # 5
+    'Nuclear bodies',
+    'Endoplasmic reticulum',
+    'Golgi apparatus',
+    # 'Intermediate filaments',
+    'Actin filaments', # 10
+    'Microtubules',
+    # 'Mitotic spindle',
+    'Centrosome',
+    'Plasma membrane',
+    'Mitochondria', # 15
+    # 'Aggresome',
+    'Cytosol',
+    'Vesicles and punctate cytosolic patterns', # 18
+]
+
+
+NAME_MAPPING_34_TO_19 = {
+  'Nucleoplasm': 'Nucleoplasm',
+  'Nuclear membrane': 'Nuclear membrane',
+  'Nucleoli': 'Nucleoli',
+  'Nucleoli fibrillar center': 'Nucleoli fibrillar center',
+  'Nuclear speckles': 'Nuclear speckles',
+  'Nuclear bodies': 'Nuclear bodies',
+  'Endoplasmic reticulum': 'Endoplasmic reticulum',
+  'Golgi apparatus': 'Golgi apparatus',
+  # 'Intermediate filaments': 'Intermediate filaments',
+  'Actin filaments': 'Actin filaments',
+  'Focal adhesion sites': 'Actin filaments',
+  'Microtubules': 'Microtubules',
+  # 'Mitotic spindle': 'Mitotic spindle',
+  'Centrosome': 'Centrosome',
+  'Centriolar satellite': 'Centrosome',
+  'Plasma membrane': 'Plasma membrane',
+  'Cell Junctions': 'Plasma membrane',
+  'Mitochondria': 'Mitochondria',
+  # 'Aggresome': 'Aggresome',
+  'Cytosol': 'Cytosol',
+  'Vesicles': 'Vesicles and punctate cytosolic patterns',
+  'Peroxisomes': 'Vesicles and punctate cytosolic patterns',
+  'Endosomes': 'Vesicles and punctate cytosolic patterns',
+  'Lysosomes': 'Vesicles and punctate cytosolic patterns',
+  'Lipid droplets': 'Vesicles and punctate cytosolic patterns',
+  'Cytoplasmic bodies': 'Vesicles and punctate cytosolic patterns'
+}
+
+
+OPENCELL_LOCALIZATION = [
+    'nucleoplasm', # 0
+    'vesicles',
+    'nucleolus_gc',
+    'cytoskeleton',
+    'golgi',
+    'big_aggregates', # 5
+    'cytoplasmic',
+    'nuclear_membrane',
+    'focal_adhesions',
+    'er',
+    'chromatin', # 10
+    'nuclear_punctae',
+    'nucleolus_fc_dfc',
+    'membrane',
+    'cell_contact',
+    'centrosome', # 15
+    'mitochondria',
+]
+
+
 class _Mode(Enum):
   PROTEIN_LOCALIZATION = "protein_localization"
+  PROTEIN_LOCALIZATION_19 = "protein_localization_19"
+  OPENCELL_LOCALIZATION = "opencell_localization"
   PROTEIN_TYPE = "protein_type"
 
 
@@ -60,20 +136,33 @@ class _WildCard(Enum):
 
 
 class SubcellLocTransform:
-  def __init__(self, root, classes):
+  def __init__(self, root, classes, mode=_Mode.PROTEIN_LOCALIZATION):
     self.ensg_locs = {}
     locations = pd.read_csv(os.path.join(root, 'subcellulars.txt'), header=0)
+    LOCALIZATION = (
+        PROTEIN_LOCALIZATION if mode == _Mode.PROTEIN_LOCALIZATION.value else
+        PROTEIN_LOCALIZATION_19 if mode == _Mode.PROTEIN_LOCALIZATION_19.value else
+        OPENCELL_LOCALIZATION if mode == _Mode.OPENCELL_LOCALIZATION.value else
+        None
+    )
+    if LOCALIZATION is None:
+      raise ValueError(f"Unsupported mode: {mode}. Supported modes are: {[m.value for m in _Mode]}")
+
     for _, row in locations.iterrows():
       ensg = row['Ensembl']
       locs = row['Subcellular location'].strip().split(';')
-      locs_onehot = np.zeros(len(PROTEIN_LOCALIZATION), dtype=np.int32)
+      locs_onehot = np.zeros(len(LOCALIZATION), dtype=np.int32)
+ 
       for loc in locs:
-        if loc in PROTEIN_LOCALIZATION:
-          loc_idx = PROTEIN_LOCALIZATION.index(loc)
+        if mode == _Mode.PROTEIN_LOCALIZATION_19.value:
+          loc = NAME_MAPPING_34_TO_19.get(loc, 'Negative')  # Map to 19 classes, default to 'Negative' if not found
+
+        if loc in LOCALIZATION:
+          loc_idx = LOCALIZATION.index(loc)
           locs_onehot[loc_idx] = 1
         else:
           logger.warning(f"Unknown subcellular location '{loc}' for Ensembl ID '{ensg}'. Skipping.")
-        self.ensg_locs[ensg] = locs_onehot
+      self.ensg_locs[ensg] = locs_onehot
       logger.info(f"Loaded subcellular locations for Ensembl ID '{ensg}': {locs_onehot}")
     self.classes = classes
 
@@ -101,8 +190,8 @@ class ProtHPADataset(ImageFolder):
     self.wildcard = wildcard
     logger.info(f"Initialized ProtHPADataset with mode {self.mode}, wildcard {self.wildcard}, and {len(classes)} classes.")
 
-    if mode == _Mode.PROTEIN_LOCALIZATION.value:
-      sub_loc_trans = SubcellLocTransform(root, classes)
+    if mode in [_Mode.PROTEIN_LOCALIZATION.value, _Mode.PROTEIN_LOCALIZATION_19.value, _Mode.OPENCELL_LOCALIZATION.value]:
+      sub_loc_trans = SubcellLocTransform(root, classes, mode=mode)
       if target_transform is not None:
         target_transform = Compose([sub_loc_trans, target_transform])
       else:
@@ -142,4 +231,8 @@ class ProtHPADataset(ImageFolder):
   def get_targets(self):
     if self.mode == _Mode.PROTEIN_LOCALIZATION.value:
       return np.arange(len(PROTEIN_LOCALIZATION), dtype=np.int32)
+    elif self.mode == _Mode.PROTEIN_LOCALIZATION_19.value:
+      return np.arange(len(PROTEIN_LOCALIZATION_19), dtype=np.int32)
+    elif self.mode == _Mode.OPENCELL_LOCALIZATION.value:
+      return np.arange(len(OPENCELL_LOCALIZATION), dtype=np.int32)
     return np.array(self._targets, dtype=np.int32)

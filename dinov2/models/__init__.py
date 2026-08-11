@@ -7,6 +7,7 @@ import logging
 
 from . import protnet as prots
 from . import vision_transformer as vits
+from .cytoself import Cytoself
 
 
 logger = logging.getLogger("dinov2")
@@ -71,6 +72,26 @@ def build_model(
             drop_path_uniform=configs.drop_path_uniform,
         )
         embed_dim = student.embed_dim
+    elif "cytoself" == configs.arch:
+        if not only_teacher:
+            raise NotImplementedError("Cytoself only supports teacher model for now.")
+        #  'input_shape': (2, 224, 224),
+        # 'emb_shapes': ((56, 56), (7, 7)),
+        # 'output_shape': (2, 224, 224),
+        # 'fc_output_idx': [2],
+        # 'vq_args': {'num_embeddings': 512, 'embedding_dim': 64},
+        # 'num_class': len(datamanager.unique_labels),
+        # 'fc_input_type': 'vqvec',
+        teacher = Cytoself(
+            input_shape=configs.input_shape,
+            emb_shapes=configs.emb_shapes,
+            output_shape=configs.output_shape,
+            vq_args=dict(configs.vq_args),
+            num_class=configs.num_class,
+            fc_input_type=configs.fc_input_type,
+            data_ch=configs.data_ch,
+        )
+        return teacher, teacher.embed_dim
     return student, teacher, embed_dim
 
 

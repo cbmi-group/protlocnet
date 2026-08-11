@@ -16,7 +16,7 @@ class NormalizationType(Enum):
 
 class Div255(torch.nn.Module):
     def forward(self, x):
-        x = np.array(x)
+        x = np.array(x, dtype=np.float32)
         x = x / 255
         return x
 
@@ -148,8 +148,9 @@ def make_classification_eval_cell_transform(
         Div255,
         SelfNormalizeNoDiv,
     )
+    from ..transforms import MaybeToTensor
 
-    transforms_list = [Div255()]
+    transforms_list = [Div255(), MaybeToTensor()]
     if resize_size > 0:
         transforms_list.append(transforms.Resize(resize_size, interpolation=interpolation))
 

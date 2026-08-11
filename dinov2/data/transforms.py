@@ -83,6 +83,9 @@ class MaybeToTensor(transforms.ToTensor):
 IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
 
+# IMAGENET_DEFAULT_MEAN = (0.0, 0.0, 0.0)
+# IMAGENET_DEFAULT_STD = (1.0, 1.0, 1.0)
+
 
 def make_normalize_transform(
     mean: Sequence[float] = IMAGENET_DEFAULT_MEAN,
@@ -110,7 +113,9 @@ def make_classification_train_transform(
     mean: Sequence[float] = IMAGENET_DEFAULT_MEAN,
     std: Sequence[float] = IMAGENET_DEFAULT_STD,
 ):
-    transforms_list = [transforms.RandomResizedCrop(crop_size, interpolation=interpolation)]
+    transforms_list = [
+        transforms.RandomResizedCrop(crop_size, interpolation=interpolation)
+    ]
     if hflip_prob > 0.0:
         transforms_list.append(transforms.RandomHorizontalFlip(hflip_prob))
     transforms_list.extend(

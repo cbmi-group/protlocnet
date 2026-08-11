@@ -133,7 +133,6 @@ def get_args_parser(
     parser.add_argument(
         '--token-type',
         type=str,
-        choices=['px', 'cx', None],
         default=None,
         help='which tokens to use for linear evaluation'
     )
@@ -300,6 +299,7 @@ def evaluate_linear_classifiers(
     results_dict = {}
     max_accuracy = 0
     best_classifier = ""
+    additional_dict = None
     for i, (classifier_string, metric) in enumerate(results_dict_temp.items()):
         if metric_type in (MetricType.CONFUSION_MATRIX, MetricType.MULTILABEL_CONFUSION_MATRIX):
             metric = ConfusionMatrixResult(metric_type, metric)

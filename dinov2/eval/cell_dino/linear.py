@@ -26,6 +26,7 @@ from dinov2.data import SamplerType, make_data_loader, make_dataset, DatasetWith
 from dinov2.data.cell_dino.transforms import NormalizationType, make_classification_eval_cell_transform
 import dinov2.distributed as distributed
 from dinov2.eval.metrics import MetricType, build_metric
+from dinov2.eval.metrics import ConfusionMatrixResult
 from dinov2.eval.setup import get_args_parser as get_setup_args_parser
 from dinov2.eval.setup import setup_and_build_model
 from dinov2.eval.cell_dino.utils import (
@@ -116,11 +117,6 @@ def get_args_parser(
         "--save-checkpoint-frequency",
         type=int,
         help="Number of epochs between two named checkpoint saves.",
-    )
-    parser.add_argument(
-        "--eval-period-iterations",
-        type=int,
-        help="Number of iterations between two evaluations.",
     )
     parser.add_argument(
         "--learning-rates",
@@ -218,7 +214,6 @@ def get_args_parser(
         num_workers=8,
         epoch_length=145,
         save_checkpoint_frequency=1250,
-        eval_period_iterations=1250,
         learning_rates=[1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2, 1e-1, 2e-1, 5e-1, 1.0],
         weight_decays=[0.0, 0.0001, 1.0e-05],
         val_metric_type=MetricType.MEAN_ACCURACY,
@@ -308,17 +303,25 @@ class AllClassifiers(nn.Module):
 
 
 class LinearPostprocessor(nn.Module):
-    def __init__(self, linear_classifier, class_mapping=None):
+    def __init__(self, linear_classifier, class_mapping=None, multilabel=False):
         super().__init__()
         self.linear_classifier = linear_classifier
         self.register_buffer("class_mapping", None if class_mapping is None else torch.LongTensor(class_mapping))
+        self.multilabel = multilabel
 
     def forward(self, samples, targets):
         preds = self.linear_classifier(samples)
-        return {
-            "preds": preds[:, self.class_mapping] if self.class_mapping is not None else preds,
-            "target": targets,
-        }
+        if not self.multilabel:
+            return {
+                'preds': preds[:, self.class_mapping] if self.class_mapping is not None else preds,
+                'target': targets.to(torch.long),
+            }
+        else:
+            return {
+                'preds': preds.sigmoid(),
+                'target': targets,
+            }
+
 
 
 def scale_lr(learning_rates, batch_size):
@@ -432,6 +435,9 @@ class Evaluator:
             config=self.config,
         )
 
+        self.multilabel = self.metric_type in (MetricType.MULTILABEL_CONFUSION_MATRIX,)
+        logger.info(f"Initialized evaluator for dataset {self.dataset_str_or_path} with metric {self.metric_type}")
+
     @torch.no_grad()
     def _evaluate_linear_classifiers(
         self,
@@ -449,7 +455,7 @@ class Evaluator:
         num_classes = len(self.class_mapping) if self.class_mapping is not None else self.training_num_classes
         metric = build_metric(self.metric_type, num_classes=num_classes)
         postprocessors = {
-            k: LinearPostprocessor(v, self.class_mapping) for k, v in linear_classifiers.classifiers_dict.items()
+            k: LinearPostprocessor(v, self.class_mapping, self.multilabel) for k, v in linear_classifiers.classifiers_dict.items()
         }
         metrics = {k: metric.clone() for k in linear_classifiers.classifiers_dict}
 
@@ -469,14 +475,26 @@ class Evaluator:
         max_accuracy = 0
         best_classifier = ""
         for _, (classifier_string, metric) in enumerate(results_dict_temp.items()):
-            logger.info(f"{prefixstring} -- Classifier: {classifier_string} * {metric}")
-            if (
-                best_classifier_on_val is None and metric["top-1"].item() > max_accuracy
-            ) or classifier_string == best_classifier_on_val:
-                max_accuracy = metric["top-1"].item()
-                best_classifier = classifier_string
+            if self.metric_type in (MetricType.CONFUSION_MATRIX, MetricType.MULTILABEL_CONFUSION_MATRIX):
+                metric = ConfusionMatrixResult(self.metric_type, metric)
+                logger.info(f'{prefixstring} -- Classifier: {classifier_string}\n{metric}')
+                if (
+                    best_classifier_on_val is None and metric.accuracy > max_accuracy
+                ) or classifier_string == best_classifier_on_val:
+                    max_accuracy = metric.accuracy
+                    best_classifier = classifier_string
+                    additional_dict = metric.dict
+            else:
+                logger.info(f"{prefixstring} -- Classifier: {classifier_string} * {metric}")
+                if (
+                    best_classifier_on_val is None and metric["top-1"].item() > max_accuracy
+                ) or classifier_string == best_classifier_on_val:
+                    max_accuracy = metric["top-1"].item()
+                    best_classifier = classifier_string
 
         results_dict["best_classifier"] = {"name": best_classifier, "accuracy": max_accuracy}
+        if additional_dict is not None:
+            results_dict['best_classifier'].update(additional_dict)
 
         logger.info(f"best classifier: {results_dict['best_classifier']}")
 
@@ -687,7 +705,7 @@ def train_linear_classifiers(
         drop_last=True,
         persistent_workers=True,
     )
-    eval_period = train_config["eval_period_iterations"] or train_config["epoch_length"]
+    eval_period = train_config["epoch_length"] * 10
     iteration = start_iter
     logger.info("Starting training from iteration {}".format(start_iter))
     metric_logger = MetricLogger(delimiter="  ")
@@ -756,7 +774,6 @@ def eval_linear_with_model(
     epoch_length,
     num_workers,
     save_checkpoint_frequency,
-    eval_period_iterations,
     learning_rates,
     weight_decays,
     autocast_dtype,
@@ -805,6 +822,9 @@ def eval_linear_with_model(
         dataset_str=train_dataset_str,
         transform=train_transform,
     )
+    epoch_length = len(train_dataset) // (batch_size * distributed.get_global_size())
+    args.epoch_length = epoch_length
+    logger.info(f'Runing for {args.epoch_length} iterations per epoch')
 
     training_num_classes = get_num_classes(train_dataset)
     if leave_one_out:
@@ -876,7 +896,6 @@ def eval_linear_with_model(
         "batch_size": batch_size,
         "num_workers": num_workers,
         "dataset_use_cache": dataset_use_cache,
-        "eval_period_iterations": eval_period_iterations,
         "epoch_length": epoch_length,
         "leave_one_out": leave_one_out,
         "bag_of_channels": bag_of_channels,
@@ -1021,7 +1040,6 @@ def main(args):
         epoch_length=args.epoch_length,
         num_workers=args.num_workers,
         save_checkpoint_frequency=args.save_checkpoint_frequency,
-        eval_period_iterations=args.eval_period_iterations,
         learning_rates=args.learning_rates,
         weight_decays=args.weight_decays,
         autocast_dtype=autocast_dtype,
