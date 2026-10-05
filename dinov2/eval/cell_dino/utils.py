@@ -36,9 +36,9 @@ class BagOfChannelsModelWithNormalize(nn.Module):
         self.n_last_blocks = n_last_blocks
         self.avgpool = avgpool
 
-    def forward(self, samples):
+    def forward(self, samples, **kwargs):
         with self.autocast_ctx():
-            features = self.model.get_intermediate_layers(samples, self.n_last_blocks, return_class_token=True)
+            features = self.model.get_intermediate_layers(samples, self.n_last_blocks, return_class_token=True,  **kwargs)
             output = create_linear_input(features, self.avgpool, use_n_blocks=self.n_last_blocks)
             return nn.functional.normalize(output, dim=1, p=2)
 
@@ -128,7 +128,7 @@ def all_gather_and_flatten(tensor_rank):
 
 
 def extract_features_cell_dino(
-    model, dataset, batch_size, num_workers, gather_on_cpu=False, shuffle=False, avgpool=False
+    model, dataset, batch_size, num_workers, gather_on_cpu=False, shuffle=False, avgpool=False, token_type=None,
 ):
     dataset_with_enumerated_targets = DatasetWithEnumeratedTargets(dataset)
     sample_count = len(dataset_with_enumerated_targets)
@@ -140,11 +140,11 @@ def extract_features_cell_dino(
         drop_last=False,
         shuffle=shuffle,
     )
-    return extract_features_with_dataloader_cell_dino(model, data_loader, sample_count, gather_on_cpu, avgpool=avgpool)
+    return extract_features_with_dataloader_cell_dino(model, data_loader, sample_count, gather_on_cpu, avgpool=avgpool, token_type=token_type)
 
 
 @torch.inference_mode()
-def extract_features_with_dataloader_cell_dino(model, data_loader, sample_count, gather_on_cpu=False, avgpool=False):
+def extract_features_with_dataloader_cell_dino(model, data_loader, sample_count, gather_on_cpu=False, avgpool=False, token_type=None):
     gather_device = torch.device("cpu") if gather_on_cpu else torch.device("cuda")
     metric_logger = MetricLogger(delimiter="  ")
     features, all_labels = None, None
@@ -152,7 +152,7 @@ def extract_features_with_dataloader_cell_dino(model, data_loader, sample_count,
         samples = samples.cuda(non_blocking=True)
         labels_rank = labels_rank.cuda(non_blocking=True)
         index = index.cuda(non_blocking=True)
-        feat = model(samples)
+        feat = model(samples, token_type=token_type)
         if isinstance(samples, list) or isinstance(feat, tuple):
             features_rank = create_linear_input(feat, avgpool=avgpool)
         else:
@@ -174,7 +174,7 @@ def extract_features_with_dataloader_cell_dino(model, data_loader, sample_count,
         # update storage feature matrix
         if len(index_all) > 0:
             features.index_copy_(0, index_all, features_all_ranks)
-            all_labels.index_copy_(0, index_all, labels_all_ranks)
+            all_labels.index_copy_(0, index_all, labels_all_ranks.long())
 
     logger.info(f"Features shape: {tuple(features.shape)}")
     logger.info(f"Labels shape: {tuple(all_labels.shape)}")
@@ -425,6 +425,7 @@ def extract_features_for_dataset_dict(
     num_workers: int,
     gather_on_cpu=False,
     avgpool=False,
+    token_type=None,
 ) -> dict[int, dict[str, torch.Tensor]]:
     """
     Extract features for each subset of dataset in the context of few-shot evaluations
@@ -432,7 +433,7 @@ def extract_features_for_dataset_dict(
     few_shot_data_dict: dict[int, dict[str, torch.Tensor]] = {}
     for try_n, dataset in dataset_dict.items():
         features, labels = extract_features_cell_dino(
-            model, dataset, batch_size, num_workers, gather_on_cpu=gather_on_cpu, avgpool=avgpool
+            model, dataset, batch_size, num_workers, gather_on_cpu=gather_on_cpu, avgpool=avgpool, token_type=token_type,
         )
         few_shot_data_dict[try_n] = {"train_features": features, "train_labels": labels}
     return few_shot_data_dict

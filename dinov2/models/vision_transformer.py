@@ -339,6 +339,8 @@ class DinoVisionTransformer(nn.Module):
         return tuple(outputs)
 
     def forward(self, *args, is_training=False, **kwargs):
+        if "token_type" in kwargs:
+            del kwargs["token_type"]  # remove token_type from kwargs to avoid passing it to the head
         ret = self.forward_features(*args, **kwargs)
         if is_training:
             return ret

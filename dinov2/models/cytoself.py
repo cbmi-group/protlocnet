@@ -466,14 +466,15 @@ class Cytoself(nn.Module):
     return decoded_final
 
   def forward(self, x, **kwargs):
-    pass
+    r = self.get_intermediate_layers(x, **kwargs)
+    return r[0][1]
 
   def get_intermediate_layers(
       self,
       x: torch.Tensor,
       n: Union[int, Sequence] = 1,
       token_type: str = 'vqvec2',
-      **_,
+      **kwargs,
   ):
     if token_type is None:
       raise ValueError('token_type must be specified.')

@@ -464,7 +464,6 @@ class ProtLocNet(nn.Module):
     generation = self.forward_protein(generation)
     return generation
 
-
   def decode_features(self, features):
     results = {}
     if self.reconstruction_mode:
@@ -483,7 +482,15 @@ class ProtLocNet(nn.Module):
 
   def forward(self, *args, **kwargs):
     features = self.forward_features(*args, **kwargs)
-    return features
+    is_training = kwargs.get("is_training", False)
+    if is_training:
+      return features
+    token_type = kwargs.get("token_type", None)
+    if token_type == 'px':
+      return features["x_norm_clstoken"].chunk(2, dim=-1)[0]
+    elif token_type == 'cx':
+      return features["x_norm_clstoken"].chunk(2, dim=-1)[1]
+    return features["x_norm_clstoken"]
 
 
 def init_weights_vit_timm(module: nn.Module, name: str = ""):

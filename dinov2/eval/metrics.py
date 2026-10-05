@@ -27,6 +27,7 @@ class MetricType(Enum):
     MEAN_PER_CLASS_MULTILABEL_F1 = "mean_per_class_multilabel_f1"
     CONFUSION_MATRIX = 'confusion_matrix'
     MULTILABEL_CONFUSION_MATRIX = 'multilabel_confusion_matrix'
+    KNN_AGREEMENT = 'knn_agreement'
 
     @property
     def accuracy_averaging(self):
@@ -71,6 +72,11 @@ def build_metric(metric_type: MetricType, *, num_classes: int, ks: Optional[tupl
             num_classes=num_classes,
             task='multilabel',
         )
+    elif metric_type == MetricType.KNN_AGREEMENT:
+        return MetricCollection({
+            "knn_agreement": KNNLocalizationAgreement(),
+            "top-1": MultilabelF1Score(num_labels=int(num_classes), average="macro")
+        })
     raise ValueError(f"Unknown metric type {metric_type}")
 
 
@@ -211,3 +217,29 @@ class ConfusionMatrixResult:
     )
     lines.append('*******************************\n')
     return '\n'.join(lines)
+
+
+class KNNLocalizationAgreement(Metric):
+    full_state_update = False
+
+    def __init__(self, eps: float = 1e-8):
+       super().__init__()
+       self.eps = eps
+       self.add_state('agreement_sum', default=torch.tensor(0.0), dist_reduce_fx="sum")
+       self.add_state('num_samples', default=torch.tensor(0), dist_reduce_fx="sum")
+
+    def update(self, preds: Tensor, target: Tensor) -> None:
+        # preds [B, D]
+        # targets [B, D]
+        preds = preds.float().clamp(0.0, 1.0)
+        target = target.float()
+
+        intersection = (preds * target).sum(dim=1)
+        union = (preds + target - preds * target).sum(dim=1)
+
+        agreement = intersection / (union + self.eps)
+        self.agreement_sum += agreement.sum()
+        self.num_samples += preds.size(0)
+
+    def compute(self) -> Tensor:
+        return self.agreement_sum / (self.num_samples.clamp_min(1))

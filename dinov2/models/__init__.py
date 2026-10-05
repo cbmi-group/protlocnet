@@ -6,6 +6,7 @@
 import logging
 
 from . import protnet as prots
+from . import mae as maes
 from . import vision_transformer as vits
 from .cytoself import Cytoself
 
@@ -47,6 +48,16 @@ def build_model(
             drop_path_uniform=configs.drop_path_uniform,
         )
         embed_dim = student.embed_dim
+    elif configs.arch.startswith('mae'):
+        kwargs = dict(
+            img_size=img_size,
+            in_chans=configs.in_chans,
+        )
+        arch = configs.arch.replace("mae_", "")
+        teacher = maes.__dict__[arch](**kwargs)
+        if only_teacher:
+            return teacher, teacher.embed_dim
+        raise NotImplementedError("MAE student model is not implemented yet.")
     elif "vit" in configs.arch:
         vit_kwargs = dict(
             img_size=img_size,

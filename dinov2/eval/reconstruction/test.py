@@ -1,4 +1,3 @@
-from asyncio.log import logger
 import os
 import sys
 import argparse
@@ -8,6 +7,9 @@ import tqdm
 import torch
 
 from dinov2.eval.reconstruction.utils import setup_and_build_model, HPADataset
+
+import logging
+logger = logging.getLogger("dinov2")
 
 def get_args_parser():
   parser = argparse.ArgumentParser("ProtLocNet reconstruction test.")

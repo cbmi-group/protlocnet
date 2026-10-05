@@ -19,6 +19,7 @@ from sklearn.metrics import f1_score
 
 import dinov2.distributed as distributed
 from dinov2.data import make_dataset, DatasetWithEnumeratedTargets, SamplerType, make_data_loader
+from dinov2.data.transforms import make_classification_eval_transform
 from dinov2.data.cell_dino.transforms import NormalizationType, make_classification_eval_cell_transform
 from dinov2.eval.metrics import build_metric, MetricType
 from dinov2.eval.setup import get_args_parser as get_setup_args_parser
@@ -133,6 +134,17 @@ def get_args_parser(
         action="store_true",
         help="Whether to use average pooling of path tokens in addition to CLS tokens",
     )
+    parser.add_argument(
+        "--transform-type",
+        type=str,
+        choices=["cell_dino", "standard", "none"],
+        help="Whether to use the cell dino transform for evaluation",
+    )
+    parser.add_argument(
+        "--token-type",
+        type=str,
+        help="Whether to use the px or cx token for evaluation",
+    )
 
     parser.set_defaults(
         train_dataset_str="ImageNet:split=TRAIN",
@@ -141,6 +153,7 @@ def get_args_parser(
         temperature=0.07,
         batch_size=256,
         resize_size=0,
+        transform_type="cell_dino",
     )
     return parser
 
@@ -183,7 +196,7 @@ def create_train_test_dataset_dict_leave_one_out(
 
 
 def eval_knn_with_leave_one_out(
-    model, leave_one_out_dataset, train_dataset, test_dataset, metric_type, nb_knn, temperature, batch_size, num_workers
+    model, leave_one_out_dataset, train_dataset, test_dataset, metric_type, nb_knn, temperature, batch_size, num_workers, token_type=None,
 ):
     num_classes = get_num_classes(test_dataset)
     train_dataset_dict = create_train_dataset_dict(train_dataset)
@@ -191,10 +204,10 @@ def eval_knn_with_leave_one_out(
 
     logger.info("Extracting features for train set...")
     train_data_dict = extract_features_for_dataset_dict(
-        model, train_dataset_dict, batch_size, num_workers, gather_on_cpu=True
+        model, train_dataset_dict, batch_size, num_workers, gather_on_cpu=True, token_type=token_type,
     )
     test_data_dict = extract_features_for_dataset_dict(
-        model, test_dataset_dict, batch_size, num_workers, gather_on_cpu=True
+        model, test_dataset_dict, batch_size, num_workers, gather_on_cpu=True, token_type=token_type,
     )
 
     train_features = train_data_dict[0]["train_features"]
@@ -304,6 +317,8 @@ def eval_knn_with_model(
     leave_one_out_dataset="",
     bag_of_channels=False,
     avgpool=False,
+    transform_type='cell_dino',
+    token_type: Optional[str] = None
 ):
     autocast_ctx = partial(torch.cuda.amp.autocast, enabled=True, dtype=autocast_dtype)
     if bag_of_channels:
@@ -316,9 +331,22 @@ def eval_knn_with_model(
         leave_one_out = True
 
     cudnn.benchmark = True
-    transform = make_classification_eval_cell_transform(
-        normalization_type=NormalizationType.SELF_NORM_CENTER_CROP, resize_size=resize_size, crop_size=crop_size
-    )
+    if transform_type == "cell_dino":
+        logger.info("Using cell dino transform for evaluation")
+        transform = make_classification_eval_cell_transform(
+            normalization_type=NormalizationType.SELF_NORM_CENTER_CROP, resize_size=resize_size, crop_size=crop_size
+        )
+    elif transform_type == "standard":
+        logger.info("Using standard transform for evaluation")
+        transform = make_classification_eval_transform(resize_size=resize_size, crop_size=crop_size)
+    elif transform_type == "none":
+        logger.info("Using no transform for evaluation")
+        transform = make_classification_eval_transform(
+                resize_size=resize_size, crop_size=crop_size,
+                mean=[0.0, 0.0, 0.0], std=[1.0, 1.0, 1.0]
+        )
+    else:
+        raise ValueError(f"Unknown transform type {transform_type}")
 
     train_dataset = make_dataset(dataset_str=train_dataset_str, transform=transform)
     results_dict = {}
@@ -336,6 +364,7 @@ def eval_knn_with_model(
                 temperature=temperature,
                 batch_size=batch_size,
                 num_workers=num_workers,
+                token_type=token_type,
             )
         else:
             results_dict_knn = eval_knn(
@@ -347,6 +376,7 @@ def eval_knn_with_model(
                 temperature=temperature,
                 batch_size=batch_size,
                 num_workers=num_workers,
+                token_type=token_type,
             )
 
     for knn_ in results_dict_knn.keys():
@@ -357,6 +387,10 @@ def eval_knn_with_model(
             top5 = results_dict_knn[knn_]["top-5"]
             results_dict[f"{val_dataset_str}_{knn_} Top 5"] = top5
             results_string += f"Top5: {top5:.2f}"
+        for key in results_dict_knn[knn_].keys():
+            if key != "top-1" and key != "top-5":
+                results_dict[f"{val_dataset_str}_{knn_} {key}"] = results_dict_knn[knn_][key]
+                results_string += f", {key}: {results_dict_knn[knn_][key]:.2f}"
         logger.info(results_string)
 
     metrics_file_path = os.path.join(output_dir, "results_eval_knn.json")
@@ -381,6 +415,7 @@ def eval_knn(
     few_shot_eval=False,
     few_shot_k_or_percent=None,
     few_shot_n_tries=1,
+    token_type: Optional[str] = None
 ):
     num_classes = get_num_classes(train_dataset)
     train_dataset_dict = create_train_dataset_dict(
@@ -394,7 +429,7 @@ def eval_knn(
 
     train_data_dict: dict[int, dict[str, torch.Tensor]] = {}
     for try_n, dataset in train_dataset_dict.items():
-        features, labels = extract_features_cell_dino(model, dataset, batch_size, num_workers, gather_on_cpu=True)
+        features, labels = extract_features_cell_dino(model, dataset, batch_size, num_workers, gather_on_cpu=True, token_type=token_type)
         train_data_dict[try_n] = {"train_features": features, "train_labels": labels}
 
     test_data_loader = make_data_loader(
@@ -437,6 +472,7 @@ def eval_knn(
             metrics,
             device,
             accumulate_results=False,
+            token_type=token_type,
         )
         for k in k_list:
             if k not in eval_metrics_dict:
@@ -468,6 +504,8 @@ def main(args):
         crop_size=args.crop_size,
         avgpool=args.avgpool,
         bag_of_channels=args.bag_of_channels,
+        transform_type=args.transform_type,
+        token_type=args.token_type,
     )
     return 0
 

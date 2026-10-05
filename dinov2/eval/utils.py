@@ -23,8 +23,8 @@ class ModelWithNormalize(torch.nn.Module):
         super().__init__()
         self.model = model
 
-    def forward(self, samples):
-        return nn.functional.normalize(self.model(samples), dim=1, p=2)
+    def forward(self, samples, **kwargs):
+        return nn.functional.normalize(self.model(samples, **kwargs), dim=1, p=2)
 
 
 class ModelWithIntermediateLayers(nn.Module):
@@ -138,7 +138,7 @@ def extract_features_with_dataloader(model, data_loader, sample_count, gather_on
         # update storage feature matrix
         if len(index_all) > 0:
             features.index_copy_(0, index_all, features_all_ranks)
-            all_labels.index_copy_(0, index_all, labels_all_ranks)
+            all_labels.index_copy_(0, index_all, labels_all_ranks.long())
 
     logger.info(f"Features shape: {tuple(features.shape)}")
     logger.info(f"Labels shape: {tuple(all_labels.shape)}")
